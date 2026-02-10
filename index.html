@@ -250,7 +250,8 @@
       <div class="side-panel">
         <div class="field-label">掃描結果輸入</div>
         <div style="display: flex; align-items: center; gap: 8px;">
-          <input id="scanResult" class="scan-input" placeholder="等待掃描或手動輸入..." style="flex:1;" />
+          <!-- ✅ 修正 1：增加 maxlength="12" 限制輸入長度 -->
+          <input id="scanResult" class="scan-input" maxlength="12" placeholder="等待掃描或手動輸入..." style="flex:1;" />
         </div>
 
         <div class="btn-row" style="margin-top:12px;">
@@ -259,7 +260,7 @@
           <button class="btn btn-yellow" id="btnSheet" >📄 工作表</button>
           <button class="btn btn-pink" id="btnClose">🎀 結案</button>
           <button class="btn btn-green btn-nowrap" id="btnCatalog">📗 設備清冊查詢</button>
-          <button class="btn btn-blue" id="btnStartCamera" style="display:none;">📷 啟動相機</button>
+          <button class="btn btn-blue" id="btnStartCamera" style="display:none;">📷 重啟相機</button>
         </div>
       </div>
 
@@ -436,10 +437,10 @@ let scanStartedAt = 0;
 let cooling = false;
 
 async function startScanner(fromUserGesture = false) {
-  // ✅ 1. 如果已經確定沒有相機，且不是使用者手動觸發，就直接返回，避免無限報錯
+  // ✅ 2. 錯誤修正：如果已經確定沒有相機，且不是使用者手動觸發，就直接返回，避免無限報錯
   if (noCameraAvailable && !fromUserGesture) return;
   
-  // ✅ 2. 如果是使用者手動觸發，重置標記再試一次
+  // ✅ 2. 錯誤修正：如果是使用者手動觸發，重置標記再試一次
   if (fromUserGesture) noCameraAvailable = false;
 
   try {
@@ -487,22 +488,28 @@ async function startScanner(fromUserGesture = false) {
     camStatus.textContent = '相機啟動失敗';
     camDot.classList.remove('on');
 
-    // ✅ 3. 捕捉 NotFoundError 並設置標記，防止自動重啟
+    // ✅ 2. 錯誤修正：捕捉 NotFoundError 並設置標記，顯示按鈕
     if (e.name === 'NotFoundError' || e.name === 'DevicesNotFoundError' || e.message.includes('No video input devices found')) {
-         noCameraAvailable = true; // <--- 關鍵修改
+         noCameraAvailable = true; 
          camStatus.textContent = '找不到攝影機';
+         
+         // ✅ 強制顯示重啟相機按鈕
+         if (btnStartCamera) {
+             btnStartCamera.style.display = 'inline-block';
+             btnStartCamera.textContent = '📷 重啟相機';
+         }
+
          // 靜音錯誤提示，除非是用戶主動點擊
          if (fromUserGesture) showToast('📷 找不到攝影機裝置', 'error');
     } else if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') {
          // 權限錯誤也通常是持久的，設為不可用
          noCameraAvailable = true; 
          camStatus.textContent = '無相機權限';
+         if (btnStartCamera) btnStartCamera.style.display = 'inline-block';
          showToast('⛔ 請允許使用相機', 'error');
-    }
-
-    if (isIOS) {
-      if (btnStartCamera) btnStartCamera.style.display = 'block';
-      if (!fromUserGesture) showToast('📲 iPhone 需點一下「啟動相機」', 'error');
+    } else {
+        // 其他錯誤也顯示按鈕，以便重試
+        if (btnStartCamera) btnStartCamera.style.display = 'inline-block';
     }
   }
 }
@@ -703,7 +710,7 @@ function restartScanner() {
 // 健康檢查與自動重啟
 setInterval(() => {
   const empty = !scanInput.value.trim();
-  // ✅ 4. 加入 !noCameraAvailable 條件：如果已經確定沒相機，就不要再嘗試重啟
+  // ✅ 2. 錯誤修正：加入 !noCameraAvailable 條件：如果已經確定沒相機，就不要再嘗試重啟
   if (!scanning && empty && !cooling && !noCameraAvailable) { restartScanner(); return; }
   
   if (scanning && !cooling && scanStartedAt && (Date.now() - scanStartedAt > 40000)) {
@@ -845,9 +852,13 @@ scanInput.addEventListener('keydown', (e) => {
   el.addEventListener('input', () => {
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = setTimeout(() => {
-      if (fastStrokes >= 6 || el.value.length >= 10){ trigger('idle'); }
+      // ✅ 修正 1：放寬判斷標準
+      // 1. 延長 timeout 到 500ms（原 80ms），允許掃描槍頓一下
+      // 2. 移除純長度判斷 (el.value.length >= 10)，只依靠「快速輸入」特徵來觸發自動送出
+      // 這樣手動輸入長條碼不會被打斷，掃描槍若有頓點也不會斷開
+      if (fastStrokes >= 3 && el.value.length >= 6){ trigger('idle'); }
       fastStrokes = 0;
-    }, 80);
+    }, 500); // 延長至 500ms
   });
   el.addEventListener('paste', () => { setTimeout(() => trigger('paste'), 0); });
 })();
