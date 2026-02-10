@@ -250,7 +250,7 @@
       <div class="side-panel">
         <div class="field-label">掃描結果輸入</div>
         <div style="display: flex; align-items: center; gap: 8px;">
-          <!-- ✅ 修正 1：增加 maxlength="12" 限制輸入長度 -->
+          <!-- ✅ maxlength="12" 限制輸入長度 -->
           <input id="scanResult" class="scan-input" maxlength="12" placeholder="等待掃描或手動輸入..." style="flex:1;" />
         </div>
 
@@ -371,7 +371,7 @@ let statsHash  = "";
 let reader = null;
 let scanning = false;
 let hasWarnedUrl = false; // 避免重複警告 URL 未設定
-let noCameraAvailable = false; // ✅ 新增：標記是否有可用相機
+let noCameraAvailable = false; // 標記是否有可用相機
 
 // DOM 元素快取
 const videoEl = document.getElementById('video');
@@ -437,10 +437,10 @@ let scanStartedAt = 0;
 let cooling = false;
 
 async function startScanner(fromUserGesture = false) {
-  // ✅ 2. 錯誤修正：如果已經確定沒有相機，且不是使用者手動觸發，就直接返回，避免無限報錯
+  // 如果已經確定沒有相機，且不是使用者手動觸發，就直接返回
   if (noCameraAvailable && !fromUserGesture) return;
   
-  // ✅ 2. 錯誤修正：如果是使用者手動觸發，重置標記再試一次
+  // 如果是使用者手動觸發，重置標記再試一次
   if (fromUserGesture) noCameraAvailable = false;
 
   try {
@@ -448,17 +448,14 @@ async function startScanner(fromUserGesture = false) {
         throw new Error('Browser not support mediaDevices');
     }
 
-    // ✅ 移除原本嚴格的 enumerateDevices 檢查，改由庫自動處理，失敗再 catch
-    // 這可以避免在某些設備上 enumerateDevices 回傳空但其實有預設相機的情況
-
     if (!reader) reader = new ZXing.BrowserMultiFormatReader();
     
-    // 低耗能模式設定
-    const lowPower = isIOS || window.innerWidth <= 900;
+    // ✅ 修正：提升掃描靈敏度，大幅縮短解碼間隔
+    const scanInterval = isIOS ? 100 : 30; // 30ms 極速模式 (原 250ms)
     if ('timeBetweenDecodingAttempts' in reader) {
-      reader.timeBetweenDecodingAttempts = lowPower ? 400 : 250;
+      reader.timeBetweenDecodingAttempts = scanInterval;
     } else if ('timeBetweenScansMillis' in reader) {
-      reader.timeBetweenScansMillis = lowPower ? 400 : 250;
+      reader.timeBetweenScansMillis = scanInterval;
     }
 
     // 嘗試啟動相機：優先使用 environment (後鏡頭)
@@ -467,9 +464,8 @@ async function startScanner(fromUserGesture = false) {
             audio: false,
             video: {
                 facingMode: { ideal: 'environment' },
-                width:  { ideal: lowPower ? 640  : 1280 },
-                height: { ideal: lowPower ? 480  : 720  },
-                frameRate: lowPower ? { ideal: 24, max: 24 } : { ideal: 30, max: 30 }
+                width:  { ideal: 1280 },
+                height: { ideal: 720  }
             }
         };
         await reader.decodeFromConstraints(constraints, videoEl, onDecodeResult);
@@ -488,12 +484,12 @@ async function startScanner(fromUserGesture = false) {
     camStatus.textContent = '相機啟動失敗';
     camDot.classList.remove('on');
 
-    // ✅ 2. 錯誤修正：捕捉 NotFoundError 並設置標記，顯示按鈕
+    // 捕捉 NotFoundError 並設置標記，顯示按鈕
     if (e.name === 'NotFoundError' || e.name === 'DevicesNotFoundError' || e.message.includes('No video input devices found')) {
          noCameraAvailable = true; 
          camStatus.textContent = '找不到攝影機';
          
-         // ✅ 強制顯示重啟相機按鈕
+         // 強制顯示重啟相機按鈕
          if (btnStartCamera) {
              btnStartCamera.style.display = 'inline-block';
              btnStartCamera.textContent = '📷 重啟相機';
@@ -502,7 +498,6 @@ async function startScanner(fromUserGesture = false) {
          // 靜音錯誤提示，除非是用戶主動點擊
          if (fromUserGesture) showToast('📷 找不到攝影機裝置', 'error');
     } else if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') {
-         // 權限錯誤也通常是持久的，設為不可用
          noCameraAvailable = true; 
          camStatus.textContent = '無相機權限';
          if (btnStartCamera) btnStartCamera.style.display = 'inline-block';
@@ -549,7 +544,10 @@ function renderResult(row) {
   const card  = document.getElementById('resultCard');
   const tbody = document.querySelector('#resultTable tbody');
   if (!tbody) return;
+  
+  // ✅ 修正：只有在成功渲染結果時，才清空輸入框
   scanInput.value = '';
+  
   tbody.innerHTML = '';
   const tr = document.createElement('tr');
   // 對應 GAS 回傳的物件欄位 A, B, F, H, J, K, L
@@ -710,7 +708,7 @@ function restartScanner() {
 // 健康檢查與自動重啟
 setInterval(() => {
   const empty = !scanInput.value.trim();
-  // ✅ 2. 錯誤修正：加入 !noCameraAvailable 條件：如果已經確定沒相機，就不要再嘗試重啟
+  // ✅ 修正：加入 !noCameraAvailable 條件：如果已經確定沒相機，就不要再嘗試重啟
   if (!scanning && empty && !cooling && !noCameraAvailable) { restartScanner(); return; }
   
   if (scanning && !cooling && scanStartedAt && (Date.now() - scanStartedAt > 40000)) {
@@ -741,17 +739,17 @@ function runQuery(passedCode){
       } else {
         renderResult(res.row);
       }
-      scanInput.value = '';
+      // ✅ 修正：這裡不再自動清空 scanInput，改由 renderResult (成功顯示後) 清空
+      // 如果查無資料，條碼會留在輸入框供使用者查看
     })
     .catch(err => {
-      // 若是因為 URL 未設定導致的錯誤，不顯示查詢失敗 Toast
       if (err.message !== 'GAS_URL_NOT_SET') {
           console.error(err);
           showToast('查詢失敗', 'error', 2000);
       }
       finishProgress(false);
       if (btn) { btn.disabled = false; btn.style.opacity = 1; }
-      scanInput.value = '';
+      // ✅ 修正：發生錯誤時不清空，保留輸入內容
     });
 }
 
@@ -852,10 +850,7 @@ scanInput.addEventListener('keydown', (e) => {
   el.addEventListener('input', () => {
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = setTimeout(() => {
-      // ✅ 修正 1：放寬判斷標準
-      // 1. 延長 timeout 到 500ms（原 80ms），允許掃描槍頓一下
-      // 2. 移除純長度判斷 (el.value.length >= 10)，只依靠「快速輸入」特徵來觸發自動送出
-      // 這樣手動輸入長條碼不會被打斷，掃描槍若有頓點也不會斷開
+      // ✅ 修正：放寬判斷標準 (延遲至 500ms)
       if (fastStrokes >= 3 && el.value.length >= 6){ trigger('idle'); }
       fastStrokes = 0;
     }, 500); // 延長至 500ms
