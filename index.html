@@ -325,17 +325,16 @@
 
 <script>
 // ==========================================
-// 🔴 重要：請在此處填入新的 GAS 網頁應用程式網址 (Deployment ID URL)
+// 🔴 重要：已更新為您的實際部署網址
 // 1. 確保網址結尾是 /exec
 // 2. 確保 GAS 部署權限設定為「所有人 (Anyone)」
 // ==========================================
-const GAS_API_URL = 'https://script.google.com/macros/s/你的部署ID/exec'; 
+const GAS_API_URL = 'https://script.google.com/macros/s/AKfycbxBnPl_7XPedBwlk4pL3jYHwXteRd2SNegY24QLp6jGVvxCQDgRTXTu1XhF2rcaGh_mIw/exec'; 
 
 // 通用 API 呼叫函式 (取代 google.script.run，改用 fetch)
 async function callGasApi(action, params = {}) {
-  // 檢查是否已設定 URL，若無則拋出特定錯誤以中止請求
+  // 檢查是否已設定 URL
   if (GAS_API_URL.includes('你的部署ID') || !GAS_API_URL.startsWith('http')) {
-    // 使用特定代碼 'GAS_URL_NOT_SET'，讓呼叫端可以忽略這個錯誤
     throw new Error('GAS_URL_NOT_SET');
   }
 
