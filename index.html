@@ -859,9 +859,8 @@ scanInput.addEventListener('keydown', (e) => {
 
 // 設備清冊連結
 document.getElementById('btnCatalog').addEventListener('click', () => {
-  // 注意：這裡填寫的是設備清冊的 Viewer 網址，如果還是同一個 GAS 專案的 GET 入口，可能需要另外處理 doGet 路由
-  // 目前保留原本的連結
-  window.open('https://script.google.com/macros/s/AKfycbz9Il_sTz9LeC-eq3rWmP21FxmrpOlx0JFOLl8H--y5JWJQF4YEESjqUqk0V5QFLNGiXA/exec', '_blank');
+  // ✅ 修正：更新為 GitHub Pages 網址
+  window.open('https://mikania0000.github.io/Equ-query/', '_blank');
 });
 document.getElementById('btnQuery').addEventListener('click', () => { runQuery(); });
 if (btnStartCamera) btnStartCamera.addEventListener('click', requestCameraOnTap);
