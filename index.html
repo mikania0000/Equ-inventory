@@ -1,893 +1,375 @@
-<!DOCTYPE html>
-<html lang="zh-Hant">
-<head>
-  <meta charset="UTF-8" />
-  <!-- 支援 iPhone 瀏海安全區與響應式縮放 -->
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>鳳甲國中設備盤點</title>
+/***** 公用設定 *****/
+const SS_ID = '11KTGQY5DhUbPBTzFGGrGFhUHZoMa4FfKOYAQHq2P0Wo';
+const SHEET_ASSETS = '財產';
 
-  <!-- ZXing 條碼/QR 掃描庫 -->
-  <script src="https://unpkg.com/@zxing/library@0.20.0"></script>
+// ★ 白名單試算表 ID ★
+const WHITELIST_SHEET_ID = '1Q4omavswaesdAw2y0ngGxbqkum0fpaPXDzUlwqiMmpA';
 
-  <style>
-    /* ========== CSS 樣式區域 ========== */
-    body {
-      font-family: "微軟正黑體", system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-      background: #f7f7f7;
-      margin: 0; padding: 30px 0;
-    }
-    .main-wrapper {
-      width: 1200px; max-width: 95%; margin: 0 auto;
-    }
-    .container {
-      background: #fff;
-      border-radius: 16px;
-      box-shadow: 0 10px 26px rgba(0,0,0,0.08);
-      padding: 24px 24px 32px;
-      /* 底部預留安全區 */
-      padding-bottom: max(32px, env(safe-area-inset-bottom));
-    }
-    h1 {
-      font-size: 55px; text-align: center; margin: 10px 0 16px;
-      letter-spacing: 2px;
-      background: linear-gradient(90deg, #1565c0, #42a5f5);
-      -webkit-background-clip: text; background-clip: text;
-      color: transparent; font-weight: 900;
-    }
+/***** API 入口 (處理外部請求) *****/
+function doPost(e) {
+  // 處理 CORS (允許跨網域存取)
+  const lock = LockService.getScriptLock();
+  // 嘗試獲取鎖，防止並發寫入衝突 (最多等待 10 秒)
+  lock.tryLock(10000);
 
-    /* 掃描區塊佈局 */
-    .scanner-box {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) 420px;
-      grid-template-areas: "video side";
-      gap: 24px; align-items: start; margin-top: 10px;
-    }
-    .video-wrap {
-      grid-area: video; position: relative;
-      background: #000; border-radius: 12px; overflow: hidden;
-      min-height: 320px; aspect-ratio: 16 / 9;
-    }
-    video { width: 100%; height: 100%; display: block; object-fit: cover; }
-    
-    /* 瞄準框 */
-    .reticle {
-      position: absolute; inset: 0; pointer-events: none;
-      box-shadow: inset 0 0 0 2px rgba(255,255,255,0.08);
-    }
-    .reticle::before, .reticle::after {
-      content: ""; position: absolute; width: 80px; height: 80px; border: 4px solid #00e676;
-    }
-    .reticle::before { top: 16px; left: 16px; border-right: none; border-bottom: none; }
-    .reticle::after  { right: 16px; bottom: 16px; border-left: none; border-top: none; }
+  try {
+    const postData = JSON.parse(e.postData.contents);
+    const action = postData.action;
+    const params = postData.params || postData; // 兼容兩種傳參方式
+    let result = {};
 
-    /* 右側操作面板 */
-    .side-panel {
-      grid-area: side; background: #fafafa;
-      border: 1px solid #eee; border-radius: 12px; padding: 18px; align-self: start;
-    }
-    .field-label { font-size: 18px; color: #555; margin-bottom: 8px; }
-    .scan-input {
-      width: 90%; font-size: 26px; padding: 10px 12px;
-      border: 2px solid #cfd8dc; border-radius: 10px; outline: none; background: #fff;
-    }
-    .scan-input:focus {
-      border-color: #42a5f5; box-shadow: 0 0 0 4px rgba(66,165,245,0.15);
+    // 路由分發
+    switch (action) {
+      // 🆕 帳號管理與登入系列動作
+      case 'verifyLogin':
+        result = verifyLogin(WHITELIST_SHEET_ID, params.email);
+        break;
+      case 'getWhitelist':
+        result = { status: "success", data: getWhitelist(WHITELIST_SHEET_ID) };
+        break;
+      case 'addWhitelist':
+        result = addWhitelist(WHITELIST_SHEET_ID, params.email);
+        break;
+      case 'updateWhitelist':
+        result = updateWhitelist(WHITELIST_SHEET_ID, params.oldEmail, params.newEmail);
+        break;
+      case 'deleteWhitelist':
+        result = deleteWhitelist(WHITELIST_SHEET_ID, params.email);
+        break;
+
+      // 原始盤點動作
+      case 'getCompareOptions':
+        result = getCompareOptions();
+        break;
+      case 'searchAssets':
+        result = searchAssets(params);
+        break;
+      case 'markDiscard':
+        result = markDiscard(params); // params 預期是 barcode，但新版可能是物件，以下會做防呆
+        break;
+      case 'cancelDiscard':
+        result = cancelDiscard(params); 
+        break;
+      default:
+        result = { error: 'Unknown action' };
     }
 
-    /* 按鈕群組 */
-    .btn-row {
-      display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; justify-content: center;
-    }
-    .btn {
-      min-width: 120px; padding: 8px 12px; font-size: 20px;
-      border: none; border-radius: 12px; cursor: pointer; color: #fff;
-      transition: transform .05s ease, box-shadow .2s ease;
-      box-shadow: 0 4px 10px rgba(0,0,0,0.1);
-    }
-    .btn:active { transform: translateY(1px); }
-    .btn-green { background: #2e7d32; }
-    .btn-green:hover { box-shadow: 0 6px 16px rgba(46,125,50,0.35); }
-    .btn-red { background: #c62828; }
-    .btn-red:hover { box-shadow: 0 6px 16px rgba(198,40,40,0.35); }
-    .btn-blue { background: #1565c0; }
-    .btn-blue:hover { box-shadow: 0 6px 16px rgba(21,101,192,0.35); }
-    .btn-yellow { background: #fbc02d; color: #000; }
-    .btn-yellow:hover { box-shadow: 0 6px 16px rgba(251,192,45,0.35); }
-    .btn-pink { background: #ec407a; }
-    .btn-pink:hover { box-shadow: 0 6px 16px rgba(236,64,122,0.35); }
-    .btn-nowrap{ white-space: nowrap; }
+    return ContentService.createTextOutput(JSON.stringify(result))
+      .setMimeType(ContentService.MimeType.JSON);
 
-    /* 狀態顯示 */
-    .status-row {
-      display: flex; gap: 12px; align-items: center; margin-top: 12px;
-      color: #666; font-size: 14px;
-    }
-    .dot { width: 10px; height: 10px; border-radius: 50%; background: #c62828; }
-    .dot.on { background: #2e7d32; }
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({ error: err.toString() }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } finally {
+    lock.releaseLock();
+  }
+}
 
-    /* 浮動提示 Toast */
-    .toast {
-      position: fixed; left: 50%; top: 60%; transform: translate(-50%, -50%);
-      padding: 12px 18px; font-size: 26px; color: #fff; border-radius: 16px;
-      z-index: 9999; opacity: 0; pointer-events: none;
-      animation: fadeInOut 3s ease forwards; white-space: nowrap;
-    }
-    .toast.success { background: #2e7d32; }
-    .toast.error   { background: #c62828; }
-    .toast.info { background: #1565c0; }
-    @keyframes fadeInOut {
-      0%{ opacity:0; transform:translate(-50%, -6px); }
-      10%{ opacity:1; transform:translate(-50%, 0); }
-      80%{ opacity:1; }
-      100%{ opacity:0; transform:translate(-50%, -6px); }
-    }
+// doGet 僅用於簡單測試，確認 API 活著
+function doGet(e) {
+  return ContentService.createTextOutput(JSON.stringify({ status: 'API is running', mode: 'POST_ONLY' }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
 
-    /* 手機版適應 */
-    @media (max-width: 1200px) {
-      body { padding: 18px 0; }
-      .main-wrapper { max-width: 100%; padding: 0 10px; }
-      .container { padding: 16px; border-radius: 12px; }
-      h1 { font-size: 30px; letter-spacing: 1px; }
-      .scanner-box {
-        grid-template-columns:1fr;
-        grid-template-areas: "video" "side"; gap: 12px;
-      }
-      .video-wrap { min-height: 220px; aspect-ratio: 4 / 3; }
-      .reticle::before, .reticle::after { width: 56px; height: 56px; border-width: 3px; }
-      .side-panel { padding: 12px; margin-top: 6px; }
-      .field-label { font-size: 16px; }
-      .scan-input { font-size: 22px; padding: 10px; }
-      .btn { font-size: 18px; padding: 12px 14px; }
-      .status-row { font-size: 13px; }
-      .toast { top: 12%; font-size: 22px; }
-    }
-
-    /* 統計卡片 */
-    .stats-card{
-      margin-top: 16px; background: #ffffff; border: 1px solid #e3f2fd;
-      border-radius: 12px; padding: 14px; box-shadow: 0 6px 18px rgba(13,71,161,0.06);
-    }
-    .stats-title{
-      font-size: 28px; font-weight: 800; color: #0d47a1;
-      margin: 4px 4px 10px; letter-spacing: 1px; display: flex; align-items: center; gap: 8px;
-    }
-    .stats-title::before{
-      content:""; width: 10px; height: 10px; border-radius: 50%; background:#42a5f5;
-    }
-    .stats-wrap{ overflow-x: auto; }
-    .stats-table{ width: 100%; border-collapse: collapse; font-size: 26px; }
-    .stats-table thead th{
-      background: linear-gradient(90deg,#1565c0,#42a5f5);
-      color:#fff; font-weight:700; padding: 10px 12px; text-align:center;
-    }
-    .stats-table td{ border: 1px solid #e0e0e0; padding: 10px 12px; text-align:center; }
-    .stats-table tbody tr:nth-child(odd){ background:#fafafa; }
-    #statsEmpty{ font-size: 16px; color:#888; padding: 10px 4px; text-align:center; }
-    
-    /* 報廢標籤 */
-    .status-discard {
-      background-color: #d32f2f; color: #fff; font-weight: bold;
-      padding: 4px 8px; border-radius: 6px; display: inline-block;
-    }
-
-    /* 查詢結果卡片 */
-    .result-card{
-      margin-top: 16px; background: #fffde7; border: 1px solid #ffe082;
-      border-radius: 12px; padding: 14px; box-shadow: 0 6px 18px rgba(255,193,7,0.12);
-    }
-    .result-title{
-      font-size: 28px; font-weight: 800; color: #f57f17;
-      margin: 4px 4px 10px; letter-spacing: 1px; display: flex; align-items: center; gap: 8px;
-    }
-    .result-title::before{
-      content:""; width: 10px; height: 10px; border-radius: 50%; background:#ffca28;
-    }
-    .result-wrap{ overflow-x:auto; }
-    .result-table{
-      width: 100%; border-collapse: collapse; font-size: 20px; table-layout: fixed;
-    }
-    .result-table thead th{
-      background: linear-gradient(90deg,#fbc02d,#ffd54f);
-      color:#3e2723; font-weight:800; padding: 10px 12px; text-align:center; font-size: 24px;
-    }
-    .result-table td{
-      border: 1px solid #ffe082; padding: 10px 12px;
-      text-align: center; vertical-align: middle;
-      word-break: break-word; white-space: normal;
-    }
-
-    /* 處理中遮罩與文字 */
-    .progress-toast{
-      position: fixed; left: 50%; top: 18%; transform: translateX(-50%);
-      min-width: 320px; background: #0d47a1; color: #fff; border-radius: 16px;
-      padding: 14px 18px; z-index: 10000; box-shadow: 0 10px 24px rgba(0,0,0,.18);
-      text-align: center; white-space: nowrap;
-    }
-    .progress-msg{ font-size: 26px; line-height: 1.25; }
-    @media (max-width: 900px){
-      .progress-msg{ font-size: 22px; }
-      .stats-card{ padding: 12px; }
-      .stats-title{ font-size: 26px; }
-      .stats-table{ font-size: 24px; }
-    }
-
-    /* 結案密碼 Modal */
-    .modal-backdrop{
-      position: fixed; inset: 0; background: rgba(0,0,0,.35);
-      display: none; align-items: center; justify-content: center; z-index: 10050;
-    }
-    .modal{
-      width: 92%; max-width: 420px; background: #fff; border-radius: 16px;
-      box-shadow: 0 12px 36px rgba(0,0,0,.2); padding: 20px;
-    }
-    .modal h3{ margin: 0 0 10px 0; font-size: 24px; color:#c2185b; font-weight: 900; }
-    .modal p{ margin: 6px 0 14px; color:#555; font-size: 16px; }
-    .modal .row{ display:flex; gap:10px; align-items:center; }
-    .modal input[type="password"]{
-      flex:1; font-size: 22px; padding: 10px 12px;
-      border: 2px solid #ffb6c1; border-radius: 10px; outline: none;
-    }
-    .modal input[type="password"]:focus{ border-color:#ec407a; box-shadow: 0 0 0 4px rgba(236,64,122,.15); }
-    .modal .btn{ min-width: 110px; }
-    .modal .btn-grey{ background:#90a4ae; }
-    .modal .btn-grey:hover{ box-shadow:0 6px 16px rgba(144,164,174,.35); }
-  </style>
-</head>
-<body>
-
-<div class="main-wrapper">
-  <div class="container">
-    <h1>鳳甲國中設備盤點</h1>
-
-    <div class="scanner-box">
-      <!-- 左側：相機預覽 -->
-      <div class="video-wrap">
-        <video id="video" playsinline webkit-playsinline autoplay muted></video>
-        <div class="reticle"></div>
-      </div>
-
-      <!-- 右側：結果輸入 + 按鈕 -->
-      <div class="side-panel">
-        <div class="field-label">掃描結果輸入</div>
-        <div style="display: flex; align-items: center; gap: 8px;">
-          <!-- ✅ maxlength="12" 限制輸入長度 -->
-          <input id="scanResult" class="scan-input" maxlength="12" placeholder="等待掃描或手動輸入..." style="flex:1;" />
-        </div>
-
-        <div class="btn-row" style="margin-top:12px;">
-          <button class="btn btn-blue" id="btnQuery">🔎 查詢</button>
-          <button class="btn btn-red" id="btnClear">🧹 清除</button>
-          <button class="btn btn-yellow" id="btnSheet" >📄 工作表</button>
-          <button class="btn btn-pink" id="btnClose">🎀 結案</button>
-          <button class="btn btn-green btn-nowrap" id="btnCatalog">📗 設備清冊查詢</button>
-          <button class="btn btn-blue" id="btnStartCamera" style="display:none;">📷 重啟相機</button>
-        </div>
-      </div>
-
-      <div class="status-row">
-        <div id="camDot" class="dot"></div>
-        <div><b>相機</b>：<span id="camStatus">初始化中…</span></div>
-        <div style="margin-left:auto;">每 4 秒健康檢查</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- 查詢結果區 -->
-  <section id="resultCard" class="result-card" style="display:none;">
-    <div class="result-title">查詢結果</div>
-    <div class="result-wrap">
-      <table id="resultTable" class="result-table" aria-label="查詢結果">
-        <colgroup>
-          <col style="width: 14%;"> <col style="width: 18%;"> <col style="width: 9%;">
-          <col style="width: 13%;"> <col style="width: 16%;"> <col style="width: 8%;">
-          <col style="width: 12%;"> <col style="width: 12%;">
-        </colgroup>
-        <thead>
-          <tr>
-            <th>編號</th> <th>名稱</th> <th>總價</th> <th>年限</th>
-            <th>條碼</th> <th>比對</th> <th>狀態</th> <th>處理</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </div>
-  </section>
-
-  <!-- 盤點統計表 -->
-  <section class="stats-card" id="statsCard">
-    <div class="stats-title">盤點統計表</div>
-    <div class="stats-wrap">
-      <table id="statsTable" class="stats-table" aria-label="盤點統計表" style="display:none;">
-        <thead>
-          <tr><th>項目</th><th>數量</th></tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-      <div id="statsEmpty">— 讀取中… —</div>
-    </div>
-  </section>
-</div>
-
-<!-- 結案密碼 Modal -->
-<div id="closeModal" class="modal-backdrop" aria-hidden="true">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="closeTitle">
-    <h3 id="closeTitle">結案確認</h3>
-    <p>此操作將清空盤點全部資料。請輸入密碼以確認：</p>
-    <div class="row" style="margin-bottom:12px;">
-      <input id="closePwd" type="password" inputmode="numeric" autocomplete="off" placeholder="請輸入密碼" />
-    </div>
-    <div class="row" style="justify-content:flex-end;">
-      <button class="btn btn-grey" id="btnCloseCancel">取消</button>
-      <button class="btn btn-pink" id="btnCloseOk">確定結案</button>
-    </div>
-  </div>
-</div>
-
-<script>
 // ==========================================
-// 🔴 重要：已更新為您的實際部署網址
-// 1. 確保網址結尾是 /exec
-// 2. 確保 GAS 部署權限設定為「所有人 (Anyone)」
+//             白名單操作函式 (終極除錯版)
 // ==========================================
-const GAS_API_URL = 'https://script.google.com/macros/s/AKfycbxBnPl_7XPedBwlk4pL3jYHwXteRd2SNegY24QLp6jGVvxCQDgRTXTu1XhF2rcaGh_mIw/exec'; 
 
-// 通用 API 呼叫函式 (取代 google.script.run，改用 fetch)
-async function callGasApi(action, params = {}) {
-  // 檢查是否已設定 URL
-  if (GAS_API_URL.includes('你的部署ID') || !GAS_API_URL.startsWith('http')) {
-    throw new Error('GAS_URL_NOT_SET');
-  }
+function cleanEmail(str) {
+  if (str == null) return '';
+  return String(str).toLowerCase().replace(/\s+/g, '');
+}
 
-  const payload = { action, ...params };
+function verifyLogin(sheetId, email) {
+  if (!email) return { status: 'error', message: '未接收到 Email 參數' };
+  
   try {
-    const response = await fetch(GAS_API_URL, {
-      method: "POST",
-      body: JSON.stringify(payload)
-      // GAS Web App 設為 "Anyone" 權限後，會自動處理 CORS
-    });
+    var ss = SpreadsheetApp.openById(sheetId);
+    var sheets = ss.getSheets();
+    var sheet = null;
+    for (var i = 0; i < sheets.length; i++) {
+      if (sheets[i].getName().trim() === '白名單') {
+        sheet = sheets[i];
+        break;
+      }
+    }
     
-    if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+    if (!sheet) {
+      return { status: 'error', message: '找不到名稱為「白名單」的工作表' };
     }
-
-    const json = await response.json();
-    return json;
-  } catch (e) {
-    console.error("API Error Details:", e);
-    // 檢查是否為 CORS 或權限錯誤
-    if (e.message.includes('Failed to fetch')) {
-        console.error('💡 提示：請檢查 Google Apps Script 部署權限是否設為「所有人 (Anyone)」。');
-    }
-    throw e;
-  }
-}
-
-// ------------------------------------------------
-// 全域變數設定
-let statsTimer = null;
-let statsBusy  = false;
-let statsHash  = "";
-let reader = null;
-let scanning = false;
-let hasWarnedUrl = false; // 避免重複警告 URL 未設定
-let noCameraAvailable = false; // 標記是否有可用相機
-
-// DOM 元素快取
-const videoEl = document.getElementById('video');
-const scanInput = document.getElementById('scanResult');
-const camDot = document.getElementById('camDot');
-const camStatus = document.getElementById('camStatus');
-const btnStartCamera = document.getElementById('btnStartCamera');
-
-// iOS 裝置偵測
-const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.userAgent.includes('Mac') && 'ontouchend' in document);
-
-// 浮動提示顯示
-function showToast(msg, type = 'success', ms = 3000) {
-  const t = document.createElement('div');
-  t.className = `toast ${type}`;
-  t.textContent = msg;
-  document.body.appendChild(t);
-  setTimeout(() => t.remove(), ms);
-}
-
-// 查詢進度條 (模擬)
-let _progressEl = null, _progressTimer = null, _progressPct = 0;
-function _ensureProgressEl(){
-  if (_progressEl) return _progressEl;
-  const box = document.createElement('div');
-  box.className = 'progress-toast';
-  box.innerHTML = `<div class="progress-msg" id="progressText">查詢中…請稍後 0%</div>`;
-  document.body.appendChild(box);
-  _progressEl = box;
-  return _progressEl;
-}
-function _setProgress(p){
-  const el = _ensureProgressEl().querySelector('#progressText');
-  if (el) el.textContent = `查詢中…請稍後 ${p}%`;
-}
-function showProgress(startPct = 0){
-  _ensureProgressEl();
-  _progressPct = Math.max(0, Math.min(100, startPct|0));
-  _setProgress(_progressPct);
-  _progressEl.style.display = 'block';
-  if (_progressTimer) clearInterval(_progressTimer);
-  _progressTimer = setInterval(() => {
-    if (_progressPct >= 90) return;
-    const step = Math.floor(Math.random() * 3) + 2;
-    _progressPct = Math.min(90, _progressPct + step);
-    _setProgress(_progressPct);
-  }, 180);
-}
-function finishProgress(success = true){
-  if (_progressTimer) { clearInterval(_progressTimer); _progressTimer = null; }
-  if (!_progressEl) return;
-  _progressPct = 100;
-  _setProgress(_progressPct);
-  setTimeout(() => { _progressEl.style.display = 'none'; }, 500);
-}
-function hideProgressNow(){
-  if (_progressTimer) { clearInterval(_progressTimer); _progressTimer = null; }
-  if (_progressEl) _progressEl.style.display = 'none';
-}
-
-// 相機邏輯
-let scanStartedAt = 0;
-let cooling = false;
-
-async function startScanner(fromUserGesture = false) {
-  // 如果已經確定沒有相機，且不是使用者手動觸發，就直接返回
-  if (noCameraAvailable && !fromUserGesture) return;
-  
-  // 如果是使用者手動觸發，重置標記再試一次
-  if (fromUserGesture) noCameraAvailable = false;
-
-  try {
-    if (!navigator.mediaDevices) {
-        throw new Error('Browser not support mediaDevices');
-    }
-
-    if (!reader) reader = new ZXing.BrowserMultiFormatReader();
     
-    // ✅ 修正：提升掃描靈敏度，大幅縮短解碼間隔
-    const scanInterval = isIOS ? 100 : 30; // 30ms 極速模式 (原 250ms)
-    if ('timeBetweenDecodingAttempts' in reader) {
-      reader.timeBetweenDecodingAttempts = scanInterval;
-    } else if ('timeBetweenScansMillis' in reader) {
-      reader.timeBetweenScansMillis = scanInterval;
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 2) return { status: 'success', authorized: false };
+    
+    var data = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+    
+    var targetEmail = cleanEmail(email);
+    var authorized = false;
+    
+    for (var j = 0; j < data.length; j++) {
+      var listEmail = cleanEmail(data[j][0]);
+      if (listEmail === targetEmail) {
+        authorized = true;
+        break;
+      }
     }
-
-    // 嘗試啟動相機：優先使用 environment (後鏡頭)
-    try {
-        const constraints = {
-            audio: false,
-            video: {
-                facingMode: { ideal: 'environment' },
-                width:  { ideal: 1280 },
-                height: { ideal: 720  }
-            }
-        };
-        await reader.decodeFromConstraints(constraints, videoEl, onDecodeResult);
-    } catch (envError) {
-        console.warn('後鏡頭啟動失敗，嘗試使用任意鏡頭...', envError);
-        // 降級嘗試：不指定 facingMode，讓瀏覽器選預設鏡頭 (解決電腦版錯誤)
-        await reader.decodeFromConstraints({ video: true }, videoEl, onDecodeResult);
-    }
-
-    if (btnStartCamera) btnStartCamera.style.display = 'none';
-
+    
+    return { status: 'success', authorized: authorized };
   } catch (e) {
-    console.error('Camera Error:', e);
-    scanning = false;
-    scanStartedAt = 0;
-    camStatus.textContent = '相機啟動失敗';
-    camDot.classList.remove('on');
-
-    // 捕捉 NotFoundError 並設置標記，顯示按鈕
-    if (e.name === 'NotFoundError' || e.name === 'DevicesNotFoundError' || e.message.includes('No video input devices found')) {
-         noCameraAvailable = true; 
-         camStatus.textContent = '找不到攝影機';
-         
-         // 強制顯示重啟相機按鈕
-         if (btnStartCamera) {
-             btnStartCamera.style.display = 'inline-block';
-             btnStartCamera.textContent = '📷 重啟相機';
-         }
-
-         // 靜音錯誤提示，除非是用戶主動點擊
-         if (fromUserGesture) showToast('📷 找不到攝影機裝置', 'error');
-    } else if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') {
-         noCameraAvailable = true; 
-         camStatus.textContent = '無相機權限';
-         if (btnStartCamera) btnStartCamera.style.display = 'inline-block';
-         showToast('⛔ 請允許使用相機', 'error');
-    } else {
-        // 其他錯誤也顯示按鈕，以便重試
-        if (btnStartCamera) btnStartCamera.style.display = 'inline-block';
-    }
+    return { status: 'error', message: '試算表讀取失敗: ' + e.toString() };
   }
 }
 
-// 掃描回調函式
-function onDecodeResult(result, err) {
-  scanning = true;
-  if (!scanStartedAt) scanStartedAt = Date.now();
-  camStatus.textContent = '掃描中…';
-  camDot.classList.add('on');
-  if (result) {
-    const text = String(result.getText() || '').trim();
-    if (text) {
-      scanInput.value = text;
-      stopScanner();
-      runQuery(text); // 掃描成功後自動查詢
+function getWhitelist(sheetId) {
+  var ss = SpreadsheetApp.openById(sheetId);
+  var sheets = ss.getSheets();
+  var sheet = null;
+  for (var i = 0; i < sheets.length; i++) {
+    if (sheets[i].getName().trim() === '白名單') {
+      sheet = sheets[i];
+      break;
     }
   }
-}
-
-// 清除前端查詢結果
-function clearResult(){
-  const card = document.getElementById('resultCard');
-  const tbody = document.querySelector('#resultTable tbody');
-  if (tbody) tbody.innerHTML = '';
-  if (card) card.style.display = 'none';
-}
-
-// 格式化狀態 (報廢紅字)
-function formatStatusHTML(s){
-  const t = String(s ?? '');
-  return t.includes('報廢') ? `<span class="status-discard">${t}</span>` : t;
-}
-
-// 渲染查詢結果表格
-function renderResult(row) {
-  const card  = document.getElementById('resultCard');
-  const tbody = document.querySelector('#resultTable tbody');
-  if (!tbody) return;
+  if (!sheet) throw new Error('找不到名稱為「白名單」的工作表分頁');
   
-  // ✅ 修正：只有在成功渲染結果時，才清空輸入框
-  scanInput.value = '';
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return [];
   
-  tbody.innerHTML = '';
-  const tr = document.createElement('tr');
-  // 對應 GAS 回傳的物件欄位 A, B, F, H, J, K, L
-  const cells = [row.A, row.B, row.F, row.H, row.J, row.K, row.L];
-
-  cells.forEach((v, idx) => {
-    const td = document.createElement('td');
-    if (idx === 6) td.innerHTML = formatStatusHTML(v); // 狀態欄位
-    else td.textContent = v ?? '';
-    tr.appendChild(td);
-  });
-
-  // 操作按鈕 (報廢)
-  const tdAction   = document.createElement('td');
-  const uploadBtn  = document.createElement('button');
-  uploadBtn.textContent = '報廢';
-  uploadBtn.className   = 'btn btn-green';
-  uploadBtn.style.minWidth = '80px';
-  uploadBtn.style.fontSize = '20px';
-  tdAction.appendChild(uploadBtn);
-  tr.appendChild(tdAction);
-
-  // 報廢按鈕點擊事件
-  uploadBtn.addEventListener('click', () => {
-    const code = (row.J || '').trim();
-    const matchCount = Number(row.K) || 0;
-    const statusText = (row.L  || '').trim();
-
-    if (statusText.includes('報廢')) { showToast('🛑 此設備已報廢，不用上傳', 'info', 2500); return; }
-    if (matchCount >= 1) { showToast('📦 設備已上傳!', 'info', 2000); return; }
-    if (!code) { showToast('⛔ 無條碼，無法上傳', 'error', 2000); return; }
-
-    uploadBtn.disabled = true;
-    uploadBtn.style.opacity = 0.7;
-    showProgress(0);
-
-    // 1. 寫入盤點表
-    callGasApi('addInventoryRecord', { code: code })
-      .then(res => {
-        finishProgress(true);
-        if (res && res.ok) {
-          showToast('✅ 成功上傳', 'success', 2000);
-          loadStats(); // 刷新統計
-          const newStatusText = `${formatRocDate()}擬報廢`;
-
-          // 2. 更新財產目錄狀態 -> 3. 重新查詢以更新畫面
-          return callGasApi('updateAssetStatus', { code: code, statusText: newStatusText })
-            .then(() => callGasApi('findAssetByBarcode', { barcode: code }))
-            .then(updated => {
-              if (updated && updated.found) {
-                 tr.cells[5].textContent  = updated.row.K ?? '';
-                 tr.cells[6].innerHTML    = formatStatusHTML(updated.row.L ?? '');
-              }
-              uploadBtn.disabled = false;
-              uploadBtn.style.opacity = 1;
-            });
-        } else {
-          throw new Error('Upload failed');
-        }
-      })
-      .catch(err => {
-        console.error(err);
-        finishProgress(false);
-        showToast('⛔ 上傳/更新錯誤', 'error', 2000);
-        uploadBtn.disabled = false;
-        uploadBtn.style.opacity = 1;
-      });
-  });
-
-  tbody.appendChild(tr);
-  card.style.display = 'block';
+  var data = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+  return data.map(function(row) { return cleanEmail(row[0]); }).filter(function(e) { return e !== ''; });
 }
 
-// 載入統計資料
-function loadStats(){
-  // 檢查 API URL 是否設定，未設定則直接略過，避免報錯刷屏
-  if (GAS_API_URL.includes('你的部署ID') || !GAS_API_URL.startsWith('http')) {
-      if (!hasWarnedUrl) {
-          console.warn('GAS URL 未設定，暫停自動統計更新。');
-          hasWarnedUrl = true; // 只警告一次
-      }
-      return;
-  }
-
-  if (statsBusy) return;
-  statsBusy = true;
-  callGasApi('getStatsData')
-    .then(data => {
-      const table = document.getElementById('statsTable');
-      const tbody = table.querySelector('tbody');
-      const empty = document.getElementById('statsEmpty');
-      const rows = (data && data.rows) || [];
-      const nextHash = JSON.stringify(rows);
-      if (nextHash === statsHash) { statsBusy = false; return; }
-      statsHash = nextHash;
-      tbody.innerHTML = '';
-      if (rows.length === 0) {
-        table.style.display = 'none';
-        empty.textContent = '— 無統計資料 —';
-        empty.style.display = 'block';
-      } else {
-        rows.forEach(r => {
-          const tr = document.createElement('tr');
-          const td1 = document.createElement('td'); td1.textContent = r[0] ?? '';
-          const td2 = document.createElement('td'); td2.textContent = r[1] ?? '';
-          tr.append(td1, td2);
-          tbody.appendChild(tr);
-        });
-        empty.style.display = 'none';
-        table.style.display = 'table';
-      }
-      statsBusy = false;
-    })
-    .catch(err => {
-      // 避免洗版 Console
-      if (err.message !== 'GAS_URL_NOT_SET') {
-          console.error(err);
-          const empty = document.getElementById('statsEmpty');
-          empty.textContent = '讀取統計失敗';
-          empty.style.display = 'block';
-          document.getElementById('statsTable').style.display = 'none';
-      }
-      statsBusy = false;
-    });
-}
-
-// 自動刷新統計
-function startStatsAutoRefresh(ms = 5000){
-  if (statsTimer) clearInterval(statsTimer);
-  statsTimer = setInterval(() => {
-    if (document.visibilityState === 'visible') loadStats();
-  }, ms);
-}
-function stopStatsAutoRefresh(){
-  if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
-}
-
-// 掃描器控制
-function requestCameraOnTap() { startScanner(true); }
-function stopScanner() {
-  try {
-    if (reader) reader.reset();
-    if (videoEl && videoEl.srcObject) {
-      videoEl.srcObject.getTracks().forEach(t => t.stop());
-      videoEl.srcObject = null;
-    }
-  } catch (_) {}
-  scanning = false;
-  scanStartedAt = 0;
-  camStatus.textContent = '已暫停';
-  camDot.classList.remove('on');
-}
-function restartScanner() {
-  stopScanner();
-  setTimeout(() => startScanner(false), 200);
-}
-
-// 健康檢查與自動重啟
-setInterval(() => {
-  const empty = !scanInput.value.trim();
-  // ✅ 修正：加入 !noCameraAvailable 條件：如果已經確定沒相機，就不要再嘗試重啟
-  if (!scanning && empty && !cooling && !noCameraAvailable) { restartScanner(); return; }
-  
-  if (scanning && !cooling && scanStartedAt && (Date.now() - scanStartedAt > 40000)) {
-    // 掃描太久休息一下
-    cooling = true; stopScanner();
-    setTimeout(() => {
-      cooling = false;
-      if (empty && !noCameraAvailable) startScanner(false); // ✅ 這裡也加
-    }, 2000);
-  }
-}, 4000);
-
-// 執行查詢
-function runQuery(passedCode){
-  const code = (passedCode ?? scanInput.value).trim();
-  if (!code) { showToast('請輸入條碼!', 'error', 2000); scanInput.value = ''; return; }
-  clearResult();
-  const btn = document.getElementById('btnQuery');
-  if (btn) { btn.disabled = true; btn.style.opacity = .7; }
-  showProgress(0);
-
-  callGasApi('findAssetByBarcode', { barcode: code })
-    .then(res => {
-      finishProgress(true);
-      if (btn) { btn.disabled = false; btn.style.opacity = 1; }
-      if (!res || !res.found) {
-        showToast('查無此設備資料!', 'error', 2000);
-      } else {
-        renderResult(res.row);
-      }
-      // ✅ 修正：這裡不再自動清空 scanInput，改由 renderResult (成功顯示後) 清空
-      // 如果查無資料，條碼會留在輸入框供使用者查看
-    })
-    .catch(err => {
-      if (err.message !== 'GAS_URL_NOT_SET') {
-          console.error(err);
-          showToast('查詢失敗', 'error', 2000);
-      }
-      finishProgress(false);
-      if (btn) { btn.disabled = false; btn.style.opacity = 1; }
-      // ✅ 修正：發生錯誤時不清空，保留輸入內容
-    });
-}
-
-// 日期格式化 (民國年)
-function formatRocDate() {
-  const d = new Date();
-  return `${d.getFullYear()-1911}.${d.getMonth()+1}.${d.getDate()}`;
-}
-
-// 按鈕事件綁定
-document.getElementById('btnClear').addEventListener('click', () => {
-  scanInput.value = '';
-  clearResult();
-  hideProgressNow();
-  showToast('🧹 已清除，重新啟動掃描', 'success',2000);
-  restartScanner();
-  scanInput.focus();
-});
-document.getElementById('btnSheet').addEventListener('click', () => {
-  // 開啟工作表連結
-  window.open('https://docs.google.com/spreadsheets/d/11KTGQY5DhUbPBTzFGGrGFhUHZoMa4FfKOYAQHq2P0Wo/edit?gid=68255210#gid=68255210', '_blank');
-});
-
-// 結案 Modal 邏輯
-const closeModal = document.getElementById('closeModal');
-const closePwd   = document.getElementById('closePwd');
-const btnCloseEl = document.getElementById('btnClose');
-const btnCloseOk = document.getElementById('btnCloseOk');
-const btnCloseCancel = document.getElementById('btnCloseCancel');
-
-function openCloseModal(){ if(closeModal) { closePwd.value=''; closeModal.style.display='flex'; setTimeout(()=>closePwd.focus(),50); } }
-function hideCloseModal(){ if(closeModal) closeModal.style.display='none'; }
-
-btnCloseEl.addEventListener('click', openCloseModal);
-document.addEventListener('keydown', (e)=>{ if(e.key==='Escape'&&closeModal&&closeModal.style.display==='flex') hideCloseModal(); });
-btnCloseCancel.addEventListener('click', hideCloseModal);
-closePwd.addEventListener('keydown', (e)=>{ if (e.key === 'Enter') btnCloseOk.click(); });
-closeModal.addEventListener('click', (e)=>{ if (e.target === closeModal) hideCloseModal(); });
-
-// 確定結案
-btnCloseOk.addEventListener('click', () => {
-  const pwd = (closePwd.value || '').trim();
-  if (pwd !== '000000'){ showToast('⛔ 密碼錯誤', 'error', 2000); closePwd.select(); return; }
-  showProgress(0);
-  btnCloseOk.disabled = true;
-
-  callGasApi('clearLatestInventoryRow')
-    .then(res => {
-      finishProgress(true);
-      btnCloseOk.disabled = false;
-      if (res && res.ok){
-        hideCloseModal();
-        showToast('🎀 已結案：盤點資料清空', 'success', 2200);
-        clearResult();
-        loadStats();
-        restartScanner();
-      } else {
-        showToast('⛔ 結案失敗', 'error', 2200);
-      }
-    })
-    .catch(err => {
-      console.error(err);
-      finishProgress(false);
-      btnCloseOk.disabled = false;
-      showToast('⛔ 結案失敗', 'error', 2200);
-    });
-});
-
-// 輸入框 Enter 事件
-scanInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') { e.preventDefault(); runQuery(); }
-});
-
-// 掃描槍支援 (快速輸入偵測)
-(function enableScannerGunAutoQuery(){
-  const el = document.getElementById('scanResult');
-  if (!el) return;
-  let lastTs = 0, fastStrokes = 0, idleTimer = null, firing = false;
-  function trigger(reason = ''){
-    if (firing) return;
-    const v = (el.value || '').trim();
-    if (!v) return;
-    // 長度大於等於6才視為有效條碼
-    if (v.length >= 6){
-      firing = true;
-      runQuery(v);
-      setTimeout(()=>{ firing = false; }, 600);
+function addWhitelist(sheetId, email) {
+  var ss = SpreadsheetApp.openById(sheetId);
+  var sheets = ss.getSheets();
+  var sheet = null;
+  for (var i = 0; i < sheets.length; i++) {
+    if (sheets[i].getName().trim() === '白名單') {
+      sheet = sheets[i];
+      break;
     }
   }
-  el.addEventListener('keydown', (e) => {
-    const now = performance.now();
-    const dt = now - lastTs;
-    lastTs = now;
-    // 快速連續輸入判斷
-    if (dt > 0 && dt < 35) fastStrokes++;
-    if (e.key === 'Enter' || e.key === 'Tab'){ e.preventDefault(); trigger('enter/tab'); }
-  });
-  el.addEventListener('input', () => {
-    if (idleTimer) clearTimeout(idleTimer);
-    idleTimer = setTimeout(() => {
-      // ✅ 修正：放寬判斷標準 (延遲至 500ms)
-      if (fastStrokes >= 3 && el.value.length >= 6){ trigger('idle'); }
-      fastStrokes = 0;
-    }, 500); // 延長至 500ms
-  });
-  el.addEventListener('paste', () => { setTimeout(() => trigger('paste'), 0); });
-})();
-
-// 設備清冊連結
-document.getElementById('btnCatalog').addEventListener('click', () => {
-  // ✅ 修正：更新為 GitHub Pages 網址
-  window.open('https://mikania0000.github.io/Equ-query/', '_blank');
-});
-document.getElementById('btnQuery').addEventListener('click', () => { runQuery(); });
-if (btnStartCamera) btnStartCamera.addEventListener('click', requestCameraOnTap);
-
-// 防止輸入框被鍵盤遮擋
-scanInput.addEventListener('focus', () => {
-  setTimeout(() => { scanInput.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 100);
-});
-
-// 初始化
-window.addEventListener('load', () => {
-  startScanner(false);
-  loadStats();
-  startStatsAutoRefresh(5000);
-  scanInput.focus();
-});
-
-// 頁面可見性改變時處理 (省電)
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden') {
-    stopStatsAutoRefresh();
-    stopScanner();
-  } else {
-    if (!scanInput.value.trim()) restartScanner();
-    startStatsAutoRefresh(5000);
+  if (!sheet) return { status: 'error', message: "找不到白名單工作表" };
+  if (!email) return { status: 'error', message: "Email不得為空" };
+  
+  var currentList = getWhitelist(sheetId);
+  var targetEmail = cleanEmail(email);
+  if (currentList.includes(targetEmail)) {
+    return { status: 'error', message: "此帳號已存在" };
   }
-});
-</script>
-</body>
-</html>
+  
+  sheet.appendRow([targetEmail]);
+  return { status: 'success' };
+}
+
+function updateWhitelist(sheetId, oldEmail, newEmail) {
+  var ss = SpreadsheetApp.openById(sheetId);
+  var sheets = ss.getSheets();
+  var sheet = null;
+  for (var k = 0; k < sheets.length; k++) {
+    if (sheets[k].getName().trim() === '白名單') {
+      sheet = sheets[k];
+      break;
+    }
+  }
+  if (!sheet) return { status: 'error', message: "找不到白名單工作表" };
+  
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return { status: 'error', message: "目前無資料" };
+  
+  var data = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+  var targetOld = cleanEmail(oldEmail);
+  for (var i = 0; i < data.length; i++) {
+    if (cleanEmail(data[i][0]) === targetOld) {
+      sheet.getRange(i + 2, 1).setValue(cleanEmail(newEmail));
+      return { status: 'success' };
+    }
+  }
+  return { status: 'error', message: "找不到原帳號" };
+}
+
+function deleteWhitelist(sheetId, email) {
+  var ss = SpreadsheetApp.openById(sheetId);
+  var sheets = ss.getSheets();
+  var sheet = null;
+  for (var k = 0; k < sheets.length; k++) {
+    if (sheets[k].getName().trim() === '白名單') {
+      sheet = sheets[k];
+      break;
+    }
+  }
+  if (!sheet) return { status: 'error', message: "找不到白名單工作表" };
+  
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return { status: 'error', message: "目前無資料" };
+  
+  var data = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+  var targetEmail = cleanEmail(email);
+  for (var i = 0; i < data.length; i++) {
+    if (cleanEmail(data[i][0]) === targetEmail) {
+      sheet.deleteRow(i + 2);
+      return { status: 'success' };
+    }
+  }
+  return { status: 'error', message: "找不到要刪除的帳號" };
+}
+
+
+/***** 核心邏輯 *****/
+
+/* 工具：條碼顯示正規化 */
+function _toHalfWidthDigits_(s){ return String(s||'').replace(/[\uFF10-\uFF19]/g, ch=>String.fromCharCode(ch.charCodeAt(0)-0xFF10+0x30)); }
+function normalizeBarcodeDisplay(v){ let s=_toHalfWidthDigits_(v).trim(); s=s.replace(/\D/g,''); return s; }
+
+/* 下拉選項 */
+function getCompareOptions(){
+  const ss=SpreadsheetApp.openById(SS_ID);
+  const sh=ss.getSheetByName(SHEET_ASSETS);
+  if(!sh) return { options: [] };
+  const startRow=2, colK=11, lastRow=sh.getLastRow();
+  if(lastRow<startRow) return { options: [] };
+  const vals=sh.getRange(startRow,colK,lastRow-startRow+1,1).getDisplayValues();
+  const set=new Set();
+  vals.forEach(r=>{ const v=(r[0]||'').toString().trim(); if(v!=='') set.add(v); });
+  const options=Array.from(set).sort((a,b)=>(''+a).localeCompare(b,'zh-Hant',{numeric:true}));
+  return { options };
+}
+
+/* 查詢 */
+function searchAssets(params){
+  const p=params||{};
+  const hasAny = !!(p.A||p.B||p.I||p.J||p.K);
+  if(!hasAny) return { rows: [] }; 
+
+  const kwA=(p.A||'').toString().trim().toLowerCase();
+  const kwB=(p.B||'').toString().trim().toLowerCase();
+  const kwI=(p.I||'').toString().trim().toLowerCase();
+  const kwJ=normalizeBarcodeDisplay(p.J||''); 
+  const optK=(p.K||'').toString().trim();
+
+  const ss=SpreadsheetApp.openById(SS_ID);
+  const sh=ss.getSheetByName(SHEET_ASSETS);
+  if(!sh) return { rows: [] };
+
+  const startRow=2, lastRow=sh.getLastRow();
+  if(lastRow<startRow) return { rows: [] };
+
+  const values=sh.getRange(startRow,1,lastRow-startRow+1,12).getDisplayValues();
+
+  const rows=[];
+  for(let i=0;i<values.length;i++){
+    const r=values[i]; 
+    const A=r[0]||'', B=r[1]||'', C=r[2]||'', F=r[5]||'', G=r[6]||'', H=r[7]||'';
+    const I=r[8]||'', J=r[9]||'', K=r[10]||'', L=r[11]||'';
+
+    if (kwA && !(''+A).toLowerCase().includes(kwA)) continue;
+    if (kwB && !(''+B).toLowerCase().includes(kwB)) continue;
+    if (kwI && !(''+I).toLowerCase().includes(kwI)) continue;
+    if (kwJ && ((''+J).trim() !== kwJ)) continue;
+    if (optK && ((''+K).trim() !== optK)) continue;
+
+    rows.push({A,B,C,F,G,H,I,J,K,L});
+  }
+  return { rows };
+}
+
+/* 尋找行號 */
+function findAssetRowByBarcode(barcode){
+  const ss=SpreadsheetApp.openById(SS_ID);
+  const sh=ss.getSheetByName(SHEET_ASSETS);
+  if(!sh) throw new Error('找不到財產工作表');
+  const startRow=2, lastRow=sh.getLastRow();
+  if(lastRow<startRow) return null;
+
+  const colJ = 10; 
+  const vals = sh.getRange(startRow, colJ, lastRow-startRow+1, 1).getDisplayValues();
+  const target = (barcode||'').toString().trim();
+  for(let i=0;i<vals.length;i++){
+    if((vals[i][0]||'').toString().trim() === target){
+      return startRow + i; 
+    }
+  }
+  return null;
+}
+
+/* 報廢 */
+function markDiscard(params){
+  // 兼容直接傳字串或傳物件的方式
+  let rawBarcode = typeof params === 'object' ? params.barcode : params;
+  let barcode = normalizeBarcodeDisplay(rawBarcode||'');
+  if(!barcode) return { ok:false };
+
+  const ss = SpreadsheetApp.openById(SS_ID);
+  const shA = ss.getSheetByName(SHEET_ASSETS);
+  const row = findAssetRowByBarcode(barcode);
+  if(!row) return { ok:false };
+
+  const colK = 11, colL = 12; 
+  const kVal = shA.getRange(row, colK).getDisplayValue().toString().trim();
+  if(kVal === '1'){ return { already:true }; }
+
+  const shP = ss.getSheetByName('盤點');
+  if(!shP) throw new Error('找不到「盤點」工作表');
+  const now = new Date();
+  shP.appendRow([now, barcode]);
+
+  const lastRow = shP.getLastRow();
+  const lastRange = shP.getRange(lastRow, 1, 1, shP.getLastColumn());
+  lastRange.setFontSize(12)
+           .setHorizontalAlignment("center")
+           .setVerticalAlignment("middle")
+           .setBorder(true, true, true, true, true, true);
+
+  const rocYear = now.getFullYear() - 1911;
+  const statusText = `${rocYear}.${now.getMonth()+1}.${now.getDate()}擬報廢`;
+  
+  // 更新主表
+  shA.getRange(row, colK).setValue('1'); // 確保比對欄變為 1
+  shA.getRange(row, colL).setValue(statusText);
+
+  return { ok:true, K:'1', L:statusText }; // 回傳更新後的值
+}
+
+/* 取消報廢 */
+function cancelDiscard(params){
+  let rawBarcode = typeof params === 'object' ? params.barcode : params;
+  let barcode = normalizeBarcodeDisplay(rawBarcode||'');
+  if(!barcode) return { ok:false };
+
+  const ss=SpreadsheetApp.openById(SS_ID);
+  const shA = ss.getSheetByName(SHEET_ASSETS);
+  const row  = findAssetRowByBarcode(barcode);
+  if(!row) return { ok:false };
+
+  const colK=11, colL=12; 
+  const kVal = shA.getRange(row, colK).getDisplayValue().toString().trim();
+  
+  // 檢查是否真的需要取消 (這裡放寬一點，如果 K=1 就允許取消)
+  if(kVal !== '1'){ 
+    return { notFound:true };
+  }
+
+  const shP = ss.getSheetByName('盤點');
+  if(!shP) throw new Error('找不到「盤點」工作表');
+  const startRow=2, lastRow=shP.getLastRow();
+  if(lastRow>=startRow){
+    const rng = shP.getRange(startRow, 2, lastRow-startRow+1, 1).getDisplayValues();
+    for(let i=rng.length-1;i>=0;i--){
+      if((rng[i][0]||'').toString().trim() === barcode){
+        shP.deleteRow(startRow+i);
+      }
+    }
+  }
+
+  // 狀態改回 OK，K 欄改回 0
+  shA.getRange(row, colK).setValue('0');
+  shA.getRange(row, colL).setValue('OK');
+
+  return { ok:true, K:'0', L:'OK' };
+}
+
+// 供前端強制授權使用
+function forceAuth() {
+  SpreadsheetApp.openById('11KTGQY5DhUbPBTzFGGrGFhUHZoMa4FfKOYAQHq2P0Wo');
+  SpreadsheetApp.openById('1Q4omavswaesdAw2y0ngGxbqkum0fpaPXDzUlwqiMmpA');
+}
